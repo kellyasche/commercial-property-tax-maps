@@ -1,0 +1,213 @@
+---
+title: "Analysis of college enrollment"
+author: "Kelly Asche"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+resource_files:
+- Data/Shapefiles/County shapefiles/MNCounties_MNDOT.cpg
+- Data/Shapefiles/County shapefiles/MNCounties_MNDOT.dbf
+- Data/Shapefiles/County shapefiles/MNCounties_MNDOT.prj
+- Data/Shapefiles/County shapefiles/MNCounties_MNDOT.sbn
+- Data/Shapefiles/County shapefiles/MNCounties_MNDOT.sbx
+- Data/Shapefiles/County shapefiles/MNCounties_MNDOT.shp.xml
+- Data/Shapefiles/County shapefiles/MNCounties_MNDOT.shx
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(sf)
+library(ggrepel)
+library(scales)
+library(shiny)
+library(shinycssloaders)
+library(ggiraph)
+library(kableExtra)
+library(rmapshaper)
+library(cowplot)
+library(DT)
+library(htmlwidgets)
+library(RColorBrewer)
+library(extrafont)
+library(readxl)
+library(janitor)
+library(lubridate)
+
+loadfonts()
+```
+
+```{r loading jon docs and shapefiles, cache=TRUE, include=FALSE}
+theme_bar <- theme_bw() +
+  theme(panel.grid.major = element_line(color = "grey70", size = 0.1),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_text(face = "bold"),
+        panel.border = element_blank(),
+        legend.background = element_rect(fill = "transparent", color = "transparent"),
+        legend.key = element_rect(fill = "transparent"),
+        legend.key.size = unit(1, "lines"),
+        legend.margin = margin(0,0,0,0),
+        legend.title = element_blank(),
+        legend.text = element_text(margin = margin(l = 2)),
+        text = element_text(family = "Arial"))
+
+theme_line <- theme_bw() +
+  theme(legend.background = element_rect(fill = "transparent", color = "transparent"),
+        legend.key = element_rect(fill = "transparent"),
+        legend.text = element_text(margin = margin(l = 2)),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(color = "grey70", size = 0.1),
+        axis.ticks = element_blank(),
+        axis.text = element_text(face = "bold"),
+        panel.border = element_blank(),
+        legend.margin = margin(0,0,0,0),
+        legend.key.size = unit(1, "lines"),
+        text = element_text(family = "Arial"))
+
+
+theme_sf <- theme_bw() +
+  theme(axis.text.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks=element_blank(),
+        panel.background = element_blank(),
+        panel.grid.major = element_line(color = "white"),
+        panel.border = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        legend.title = element_blank(),
+        legend.text = element_text(margin = margin(l = 2)),
+        legend.margin = margin(0,0,0,0),
+        legend.key.size = unit(1, "lines"),
+        text = element_text(family = "Arial"))
+
+regions <- read_csv("Data/Join docs/county_regions.csv") %>%
+    select(5,6) %>%
+    unique() %>%
+    mutate(edr = str_replace(edr, "  ", " "),
+           planning.region = str_replace(planning.region, " Minnesota", ""),
+           planning.region = fct_relevel(planning.region, "Northwest", "Northeast", "Central", "Seven County Mpls-St Paul", "Southwest", "Southeast"),
+           edr = fct_relevel(edr, "EDR 1 - Northwest", "EDR 2 - Headwaters", "EDR 3 - Arrowhead", "EDR 4 - West Central", "EDR 5 - North Central", "EDR 6E- Southwest Central", "EDR 6W- Upper Minnesota Valley", "EDR 7E- East Central", "EDR 7W- Central", "EDR 8 - Southwest", "EDR 9 - South Central", "EDR 10 - Southeast", "EDR 11 - 7 County Twin Cities", "Minnesota"))
+
+counties.regions <- read_csv("Data/Join docs/county_regions.csv") %>%
+  rename(mif = `MIF Region`) %>%
+  mutate(countyfp = formatC(countyfp, width = 3, flag = "0"),
+         Name = str_to_title(Name),
+         Name = str_replace(Name, "Q", "q"),
+         Name = str_replace(Name, "Of The", "of the"),
+         Name = str_replace(Name, "Mcleod", "McLeod"),
+         Dem_Desc = ifelse(Name == "Minnesota", "Minnesota", Dem_Desc) ,
+         edr = str_replace(edr, "  ", " "),
+         planning.region = str_replace(planning.region, " Minnesota", ""),
+         planning.region = fct_relevel(planning.region, "Northwest", "Northeast", "Central", "Seven County Mpls-St Paul", "Southwest", "Southeast"),
+         edr = fct_relevel(edr, "EDR 1 - Northwest", "EDR 2 - Headwaters", "EDR 3 - Arrowhead", "EDR 4 - West Central", "EDR 5 - North Central", "EDR 6E- Southwest Central", "EDR 6W- Upper Minnesota Valley", "EDR 7E- East Central", "EDR 7W- Central", "EDR 8 - Southwest", "EDR 9 - South Central", "EDR 10 - Southeast", "EDR 11 - 7 County Twin Cities", "Minnesota"),
+         mif = ifelse(is.na(mif), "TC", mif),
+         mif = as.factor(mif),
+         mif = fct_relevel(mif, "NW", "NE", "WC", "EC", "SW", "SE", "TC"))
+
+color.ruca <- c("Entirely rural" = "#009933", "Town/rural mix" = "#99CC33", "Urban/town/rural mix" = "#CC9966", "Entirely urban" = "#754C29", "Minnesota" = "black")
+
+color.pr <- c("Northwest" = 	"#4575b4", "Northeast" = "#e0f3f8", "Central" = "#fee090", "Seven County Mpls-St Paul" = "#d73027", "Southwest" = "#91bfdb", "Southeast" = "#fc8d59", "Minnesota" = "black")
+
+color.edr <- c("EDR 1 - Northwest" = "#b3cde3", "EDR 2 - Headwaters" = "#8c96c6", "EDR 3 - Arrowhead" = "#fe9929", "EDR 4 - West Central" = "#8856a7", "EDR 5 - North Central" = "#810f7c", "EDR 6E- Southwest Central" = "#e5f5f9", "EDR 6W- Upper Minnesota Valley" = "#bdc9e1", "EDR 7E- East Central" = "#99d8c9", "EDR 7W- Central" = "#2ca25f", "EDR 8 - Southwest" = "#74a9cf", "EDR 9 - South Central" = "#0570b0", "EDR 10 - Southeast" = "#d7301f", "EDR 11 - 7 County Twin Cities" = "#d8b365", "Minnesota" = "black")
+
+color.pr.edr <- c ("Northwest" = "#4575b4","Northeast" = "#e0f3f8", "Central" = "#fee090", "Seven County Mpls-St Paul" = "#d73027", "Southwest" = "#91bfdb", "Southeast" = "#fc8d59", "Minnesota" = "black", "EDR 1 - Northwest" = "#b3cde3", "EDR 2 - Headwaters" = "#8c96c6", "EDR 3 - Arrowhead" = "#fe9929", "EDR 4 - West Central" = "#8856a7", "EDR 5 - North Central" = "#810f7c", "EDR 6E- Southwest Central" = "#e5f5f9", "EDR 6W- Upper Minnesota Valley" = "#bdc9e1", "EDR 7E- East Central" = "#99d8c9", "EDR 7W- Central" = "#2ca25f", "EDR 8 - Southwest" = "#74a9cf", "EDR 9 - South Central" = "#0570b0", "EDR 10 - Southeast" = "#d7301f", "EDR 11 - 7 County Twin Cities" = "#d8b365")
+
+mn_counties <- st_read("Data/Shapefiles/county shapefiles/MNCounties_MNDOT.shp", quiet = TRUE) %>%
+  ms_simplify(keep = .01, keep_shapes = TRUE) %>%
+  rename(countyfp = FIPS_CODE)
+
+```
+
+```{r master data, include=FALSE, cache=TRUE}
+master.house <- read_csv("Data/Property taxes/House research/Master-taxes.csv") %>%
+  mutate(UseClassLabel = as.factor(UseClassLabel)) 
+
+master.rev <- read_csv("Data/Property taxes/County/Master-commercial-net-prop-taxes.csv") 
+
+names(master.rev)
+```
+
+<br>
+
+# Commercial property tax as a percentage of total property taxes
+
+There are two datasets that inform us of the share of total property taxes paid by commercial property owners - the MN Department of Revenue local property taxes report and the House of Representatives Research estimated county property taxes paid.
+
+
+## Share of LOCAL property taxes paid by commercial properties - MN Department of Revenue
+
+
+Below is a map providing the commercial and industrial property taxes paid to each county in Minnesota as a percentage of the total property taxes collected. For this map I used the data from the MN Department of Revenue which provides the property taxes paid to all local entities by commercial properties within each county. This means that the map below is the total net property taxes paid by commercial properties to all local governments (county, school district, etc...), not just the county.
+
+The map shows that counties with economic centers typically have around 10% to 20% of their local property taxes coming from commercial properties, while it's less than 5% for rural counties without an economic trade center.
+
+<br>
+
+```{r prep share prop tax commercial dept revenue data, include=FALSE, cache=TRUE, include=FALSE, cache=TRUE}
+rev.commercial.pct.local.prop.tax.county <- master.rev %>%
+  mutate(commercial.pct.total.net.tax = commercial.net.tax / net.tax.total,
+         commercial.pct.total.net.tax.bins = cut(commercial.pct.total.net.tax,
+                                                 breaks = c(0, .5, .1, .15, .2, 1.1),
+                                                 labels = c("Less than 5%", "5% to 10%", "10% to 15%", "15% to 20%", "More than 20%"))) %>%
+  left_join(mn_counties[,c(4,7)], by = "countyfp") 
+```
+
+```{r map share prp tax commercial dept revenue data}
+rev.commercial.pct.local.prop.tax.county.map <- ggplot(filter(rev.commercial.pct.local.prop.tax.county, year == max(rev.commercial.pct.local.prop.tax.county$year))) +
+  geom_sf_interactive(color = "grey85", aes(geometry = geometry, fill = commercial.pct.total.net.tax.bins, data_id = countyfp, tooltip = paste(County, "\nNet total local commercial property taxes: ", dollar(commercial.net.tax), "\nTotal local property taxes: ", dollar(net.tax.total), "\nPercent of net local property taxes paid by commercial: ", percent(commercial.pct.total.net.tax, accuracy = .1), sep = ""))) +
+  theme_sf+
+  scale_fill_manual(values = brewer.pal(n = 6, "PuBu"),
+                    guide = guide_legend(reverse = TRUE)) +
+  labs(title = "Net local property taxes paid by commercial properties as a\npercent of total local property taxes paid in the county, 2020", caption = "MN Department of Revenue") +
+  theme(legend.box.margin = margin(50, 0, 0, -100),
+        text = element_text(size = 18))
+
+girafe(ggobj = rev.commercial.pct.local.prop.tax.county.map, height_svg = 10, width_svg = 10) %>%
+  girafe_options(opts_sizing(rescale = FALSE))
+
+```
+
+<br>
+
+## Share of COUNTY property taxes paid by commercial and industrial properties - MN House of Representatives Research
+
+The second dataset provides the share of property taxes paid by commercial properties using the MN House of Representatives Research department's estimates. Due to the craziness that there actually isn't a central place tracking property taxes paid to each local government by property type, they developed their own model that estimates it using the MN Department of Revenue data. 
+
+One wrinkle in this dataset is that they combine commercial and industrial, whereas the Department of Revenue data only includes the commercial without industrial.
+
+The map shows a very similar trend to the one above. The share of county property taxes coming from commercial and industrial properties is a bit higher in counties with an economic trade center.
+
+<br>
+
+```{r prep share prop tax commercial industrial house data, include=FALSE, cache=TRUE}
+house.commercial.share.prop.tax.county <- master.house %>%
+  select(1,2,3,4,8,14) %>%
+  group_by(countyfp, Name, year) %>%
+  mutate(total.county.tax = sum(CoTax)) %>%
+  ungroup() %>%
+  mutate(share.commercial = CoTax / total.county.tax) %>%
+  filter(UseClassLabel == "Comm'l/Indstr'l") %>%
+  mutate(share.commercial.bins = cut(share.commercial,
+                                     breaks = c(0, .5, .1, .15, .2, 1.1),
+                                                 labels = c("Less than 5%", "5% to 10%", "10% to 15%", "15% to 20%", "More than 20%"))) %>%
+  left_join(mn_counties[,c(4,7)], by = "countyfp")
+  
+  
+```
+
+```{r map share prop tax commercial industrial house data}
+house.commercial.share.prop.tax.county.map <- ggplot(filter(house.commercial.share.prop.tax.county, year == max(house.commercial.share.prop.tax.county$year))) +
+  geom_sf_interactive(color = "grey85", aes(geometry = geometry, fill = share.commercial.bins, data_id = Name, tooltip = paste(Name, "\nCounty property taxes paid by commercial and industrial properties: ", dollar(CoTax), "\nTotal property taxes paid to county: ", dollar(total.county.tax), "\nProperty taxes paid by commercial and industrial as a percentage of the total property taxes paid to county: ", percent(share.commercial, accuracy = .1), sep = ""))) +
+  theme_sf+
+  scale_fill_manual(values = brewer.pal(n = 5, "PuBu")) +
+  labs(title = "Share of county property taxes paid by\ncommercial and industrial properties") +
+  theme(legend.box.margin = margin(50, 0, 0, -100),
+        text = element_text(size = 18))
+
+girafe(ggobj = house.commercial.share.prop.tax.county.map, height_svg = 10, width_svg = 10) %>%
+  girafe_options(opts_sizing(rescale = FALSE))
+
+```
